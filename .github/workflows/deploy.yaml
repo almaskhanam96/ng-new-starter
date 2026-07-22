@@ -1,10 +1,13 @@
-name: Angular CI
+name: Build, Test, Dockerize
 
 on:
   push:
-    branches: ["main"]
+    branches:
+      - main
+
   pull_request:
-    branches: ["main"]
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -17,61 +20,95 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  ci:
+  build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Lint
         run: npm run lint
 
       - name: Test
-        run: npm test -- --watch=false --browsers=ChromeHeadless
+        run: npm run test
 
       - name: Build
         run: npm run build
 
-      - name: Ensure package is created
-        run: |
-          test -d dist
-          find dist -type f | head -n 20
+      - name: Package
+        run: npm run package
 
-      - name: Set lowercase image name
-        if: github.event_name != 'pull_request'
-        run: echo "IMAGE_NAME_LC=${IMAGE_NAME,,}" >> $GITHUB_ENV
+      - name: Upload npm package
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: dist/*.tgz
 
-      - name: Login to GHCR
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: dist/ng-new-starter/browser
+
+      - name: Attest npm package
         if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*.tgz
+          push-to-registry: false
+
+  docker:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push image
-        if: github.event_name != 'pull_request'
-        id: buildpush
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=sha,prefix=sha-
+
+      - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
 
-      - name: Attest provenance
-        if: github.event_name != 'pull_request'
+      - name: Attest Docker image
         uses: actions/attest-build-provenance@v2
         with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
-          subject-digest: ${{ steps.buildpush.outputs.digest }}
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
