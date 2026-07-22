@@ -5,9 +5,10 @@
     "ng": "ng",
     "start": "ng serve",
     "build": "ng build",
+    "lint": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.spec.json --noEmit",
     "watch": "ng build --watch --configuration development",
-    "test": "ng test",
-    "lint": "oxlint"
+    "test": "ng test --watch=false",
+    "package": "npm pack --pack-destination dist"
   },
   "private": true,
   "packageManager": "npm@11.16.0",
